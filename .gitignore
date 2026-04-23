@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.faiss
+*.pkl
+
+# Local-only files — not for GitHub
+CLAUDE.md
+EXPLANATIONS.md
+data/

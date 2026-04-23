@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python -m pytest tests/ -x --tb=short -q)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(ls *.txt *.toml)",
+      "Bash(python -m pytest tests/ --tb=short -q)"
+    ]
+  }
+}
