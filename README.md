@@ -35,7 +35,7 @@ Most RAG tutorials hide complexity behind abstractions. This project builds each
 **Requirements:** Python 3.11+
 
 ```bash
-git clone https://github.com/<your-username>/rag-pipeline.git
+git clone https://github.com/Mc54322/RAG-Pipeline.git
 cd rag-pipeline
 
 python -m venv .venv
