@@ -5,7 +5,10 @@
       "Bash(python -m pytest tests/ -x --tb=short -q)",
       "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
       "Bash(ls *.txt *.toml)",
-      "Bash(python -m pytest tests/ --tb=short -q)"
+      "Bash(python -m pytest tests/ --tb=short -q)",
+      "Bash(python -m pytest tests/ --collect-only -q)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(.venv/bin/pytest tests/ -q)"
     ]
   }
 }

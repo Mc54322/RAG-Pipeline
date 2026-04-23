@@ -65,14 +65,19 @@ rag-pipeline/
 │   ├── chunker.py          # Fixed-size and sentence-boundary chunking
 │   ├── embedder.py         # sentence-transformers wrapper
 │   ├── vector_store.py     # FAISS index with save/load
-│   ├── retriever.py        # Query → ranked chunks
+│   ├── bm25_store.py       # BM25 keyword index
+│   ├── hybrid_retriever.py # Reciprocal Rank Fusion over dense + BM25
+│   ├── reranker.py         # Cross-encoder re-ranking
+│   ├── retriever.py        # Dense query → ranked chunks
 │   ├── prompt.py           # Prompt assembly from chunks + query
 │   ├── generator.py        # Anthropic API wrapper (generate, stream, generate_with_history)
 │   ├── memory.py           # Fixed-capacity conversation history
 │   ├── document_store.py   # Multi-document registry with add/remove/rebuild
+│   ├── evaluator.py        # SQuAD metrics and full-pipeline evaluation
 │   └── benchmark.py        # Retrieval metrics and timing utilities
 ├── scripts/
-│   └── run_benchmark.py    # CLI benchmark runner
+│   ├── create_benchmark_data.py  # Generates benchmark PDFs in data/benchmark/
+│   └── run_benchmark.py          # CLI benchmark runner
 ├── tests/
 │   ├── conftest.py             # Session-scoped embedder + reranker fixtures
 │   ├── test_ingestion.py       # PDF loading and text cleaning
