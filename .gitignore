@@ -15,6 +15,5 @@ venv/
 # Local-only files — not for GitHub
 CLAUDE.md
 EXPLANATIONS.md
-RAG_AUDIT_INSTRUCTIONS.md
-RAG_AUDIT_REPORT.md
+RAG_AUDIT*.md
 data/
