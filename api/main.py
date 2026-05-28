@@ -12,6 +12,7 @@ Endpoints:
   POST /chat/clear      — reset conversation history
 """
 
+import logging
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -31,15 +32,23 @@ from api.models import (
     QueryResponse,
     SourceChunk,
 )
+from src.bm25_store import BM25Store
 from src.chunker import chunk_by_sentence, chunk_text  # both available for easy switching
 from src.document_store import DocumentStore
 from src.embedder import Embedder
 from src.generator import Generator
+from src.hybrid_retriever import HybridRetriever
 from src.ingestion import clean_text, load_pdf
 from src.memory import ConversationMemory
 from src.prompt import build_prompt, get_system_prompt
 from src.retriever import Retriever
 from src.vector_store import VectorStore
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)s  %(levelname)s  %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -62,20 +71,31 @@ class Pipeline:
         self.embedder: Embedder | None = None
         self.store: VectorStore | None = None
         self.retriever: Retriever | None = None
+        self.bm25_store: BM25Store | None = None
+        self.hybrid_retriever: HybridRetriever | None = None
         self.generator: Generator | None = None
         self.memory: ConversationMemory = ConversationMemory()
         self.document_store: DocumentStore | None = None
 
     def startup(self) -> None:
         """Load the embedding model and LLM client. Called once at app startup."""
+        logger.info("Loading embedding model...")
         self.embedder = Embedder()
         self.generator = Generator()
         self.document_store = DocumentStore(self.embedder.dimension)
+        logger.info("Pipeline ready — model: %s", self.embedder.model_name)
 
     def _rebuild_retriever(self) -> None:
-        """Rebuild the dense retriever from the current document store."""
+        """Rebuild the dense retriever, BM25 index, and hybrid retriever."""
         self.store = self.document_store.build_vector_store()
         self.retriever = Retriever(self.embedder, self.store)
+        self.bm25_store = BM25Store(self.document_store.all_chunks())
+        self.hybrid_retriever = HybridRetriever(self.retriever, self.bm25_store)
+        logger.info(
+            "Index rebuilt: %d doc(s), %d chunks",
+            self.document_store.document_count,
+            self.document_store.total_chunks,
+        )
 
     @property
     def index_size(self) -> int:
@@ -178,14 +198,28 @@ async def ingest(
         tmp.write(content)
         tmp_path = Path(tmp.name)
 
+    logger.info("Ingest request: %s (%d bytes)", file.filename, len(content))
     try:
-        raw_text = load_pdf(tmp_path)
+        try:
+            raw_text = load_pdf(tmp_path)
+        except Exception as exc:
+            logger.warning("Failed to parse PDF '%s': %s", file.filename, exc)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Could not parse PDF '{file.filename}': {exc}",
+            )
         clean = clean_text(raw_text)
+        if not clean.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"'{file.filename}' contains no extractable text — "
+                    "it may be scanned or image-only."
+                ),
+            )
         # Sentence-boundary chunking — cleaner passages, better embedding quality.
-        # To switch back to fixed character windows, comment the line below and
-        # uncomment the one after it.
+        # To switch back to fixed character windows, swap to chunk_text below.
         chunks = chunk_by_sentence(clean, max_chunk_size=512, overlap_sentences=1, source=file.filename)
-        # chunks = chunk_text(clean, chunk_size=512, overlap=64, source=file.filename)
         embeddings = pipeline.embedder.embed([c.text for c in chunks])
 
         if pipeline.document_store is None:
@@ -194,6 +228,13 @@ async def ingest(
         pipeline._rebuild_retriever()
     finally:
         tmp_path.unlink(missing_ok=True)
+
+    logger.info(
+        "Ingested '%s': %d chunks (index: %d doc(s), %d chunks total)",
+        file.filename, len(chunks),
+        pipeline.document_store.document_count,
+        pipeline.document_store.total_chunks,
+    )
 
     return IngestResponse(
         message=f"Successfully ingested '{file.filename}'.",
@@ -258,6 +299,12 @@ def delete_document(
     else:
         pipeline.store = None
         pipeline.retriever = None
+        pipeline.bm25_store = None
+        pipeline.hybrid_retriever = None
+    logger.info(
+        "Document '%s' removed. Index: %d doc(s) remaining.",
+        source, pipeline.document_store.document_count,
+    )
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -277,13 +324,15 @@ def query(
             detail="No documents ingested yet. POST a PDF to /ingest first.",
         )
 
-    results = pipeline.retriever.retrieve(
+    logger.info("Query: %r (k=%d, min_score=%.2f)", request.question[:80], request.k, request.min_score)
+    results = pipeline.hybrid_retriever.retrieve(
         request.question,
         k=request.k,
         min_score=request.min_score,
     )
 
     if not results:
+        logger.warning("No results for query: %r", request.question[:80])
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No relevant passages found. Try lowering min_score.",
@@ -291,6 +340,7 @@ def query(
 
     prompt = build_prompt(request.question, results)
     answer = pipeline.generator.generate(prompt, system=get_system_prompt())
+    logger.info("Query answered: %d chars", len(answer))
 
     sources = [
         SourceChunk(
@@ -331,13 +381,15 @@ def query_stream(
             detail="No documents ingested yet. POST a PDF to /ingest first.",
         )
 
-    results = pipeline.retriever.retrieve(
+    logger.info("Stream query: %r (k=%d)", request.question[:80], request.k)
+    results = pipeline.hybrid_retriever.retrieve(
         request.question,
         k=request.k,
         min_score=request.min_score,
     )
 
     if not results:
+        logger.warning("No results for stream query: %r", request.question[:80])
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No relevant passages found. Try lowering min_score.",
@@ -376,13 +428,15 @@ def chat(
             detail="No documents ingested yet. POST a PDF to /ingest first.",
         )
 
-    results = pipeline.retriever.retrieve(
+    logger.info("Chat (turn %d): %r", pipeline.memory.num_exchanges + 1, request.question[:80])
+    results = pipeline.hybrid_retriever.retrieve(
         request.question,
         k=request.k,
         min_score=request.min_score,
     )
 
     if not results:
+        logger.warning("No results for chat query: %r", request.question[:80])
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No relevant passages found. Try lowering min_score.",
@@ -399,6 +453,7 @@ def chat(
 
     # Store the bare question (not the full RAG prompt) to keep history compact
     pipeline.memory.add_exchange(request.question, answer)
+    logger.info("Chat turn %d answered: %d chars", pipeline.memory.num_exchanges, len(answer))
 
     sources = [
         SourceChunk(
@@ -433,4 +488,7 @@ def reset(pipeline: Pipeline = Depends(get_pipeline)) -> None:
     pipeline.document_store = DocumentStore(pipeline.embedder.dimension)
     pipeline.store = None
     pipeline.retriever = None
+    pipeline.bm25_store = None
+    pipeline.hybrid_retriever = None
     pipeline.memory.clear()
+    logger.info("Pipeline reset.")

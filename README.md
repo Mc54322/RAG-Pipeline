@@ -20,7 +20,7 @@ Most RAG tutorials hide complexity behind abstractions. This project builds each
 | Embeddings | sentence-transformers `all-MiniLM-L6-v2` | Free, runs locally, strong baseline |
 | Vector store | FAISS | Battle-tested, no infra needed |
 | Keyword search | BM25 (`rank-bm25`) | Catches exact terms embeddings miss |
-| Hybrid fusion | Reciprocal Rank Fusion | Scale-free, no hyperparameters to tune |
+| Hybrid fusion | Reciprocal Rank Fusion | Scale-free, no hyperparameters to tune — default retrieval path in the API |
 | Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 | Joint query-passage scoring, higher precision |
 | Evaluation | SQuAD token F1 + exact match | No API key needed, standard QA metrics |
 | Streaming | Anthropic SDK streaming + FastAPI SSE | Incremental token delivery, lower perceived latency |
@@ -190,6 +190,21 @@ results = retriever.retrieve("What causes climate change?", k=5, min_score=0.3)
 ```
 
 `min_score` is a cosine similarity threshold. Setting it to `0.3–0.4` filters out weakly related chunks before they reach the prompt.
+
+### Hybrid Retriever (`src/hybrid_retriever.py`)
+
+Fuses dense and BM25 results via Reciprocal Rank Fusion. This is the **default retrieval path used by the API** — all `/query`, `/query/stream`, and `/chat` requests go through it:
+
+```python
+from src.bm25_store import BM25Store
+from src.hybrid_retriever import HybridRetriever
+
+bm25_store = BM25Store(chunks)
+hybrid = HybridRetriever(retriever, bm25_store)
+results = hybrid.retrieve("What causes climate change?", k=5)
+```
+
+Dense retrieval captures semantic similarity; BM25 captures exact keyword matches. RRF fuses the two ranked lists without requiring score normalisation or a tuning parameter.
 
 ### Prompt Builder (`src/prompt.py`)
 

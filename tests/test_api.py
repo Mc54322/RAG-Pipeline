@@ -30,9 +30,11 @@ from fastapi.testclient import TestClient
 
 from api.main import Pipeline, app, get_pipeline
 from api.models import HealthResponse, IngestResponse, QueryResponse
+from src.bm25_store import BM25Store
 from src.chunker import Chunk, chunk_text
 from src.document_store import DocumentStore
 from src.embedder import Embedder
+from src.hybrid_retriever import HybridRetriever
 from src.memory import ConversationMemory
 from src.retriever import Retriever
 from src.vector_store import VectorStore
@@ -94,6 +96,9 @@ def make_pipeline_with_store(texts: list[str], dim: int = 384) -> Pipeline:
     pipeline.embedder = mock_embedder
     pipeline.store = store
     pipeline.retriever = Retriever(mock_embedder, store)
+    bm25 = BM25Store(chunks)
+    pipeline.bm25_store = bm25
+    pipeline.hybrid_retriever = HybridRetriever(pipeline.retriever, bm25)
     pipeline.generator = MagicMock()
     pipeline.generator.generate.return_value = "The answer is 42."
     return pipeline
@@ -112,6 +117,7 @@ def make_ready_pipeline(doc_store: DocumentStore | None = None) -> MagicMock:
     chunk = Chunk(text="Python is a programming language.", index=0,
                   start_char=0, end_char=33, metadata={"source": "test.pdf"})
     p.retriever.retrieve.return_value = [(chunk, 0.85)]
+    p.hybrid_retriever.retrieve.return_value = [(chunk, 0.85)]
     p.generator.generate.return_value = "Python is a language."
     p.generator.generate_with_history.return_value = "Python is a language."
     p.generator.stream.return_value = iter(["Python ", "is a language."])

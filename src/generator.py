@@ -34,7 +34,7 @@ class Generator:
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
     ) -> None:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -43,7 +43,7 @@ class Generator:
             )
         self.model = model
         self.max_tokens = max_tokens
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=api_key, max_retries=3)
 
     def generate(self, prompt: str, system: str = "") -> str:
         """
