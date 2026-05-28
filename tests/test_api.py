@@ -99,6 +99,8 @@ def make_pipeline_with_store(texts: list[str], dim: int = 384) -> Pipeline:
     bm25 = BM25Store(chunks)
     pipeline.bm25_store = bm25
     pipeline.hybrid_retriever = HybridRetriever(pipeline.retriever, bm25)
+    pipeline.reranker = MagicMock()
+    pipeline.reranker.rerank.return_value = [(chunks[0], 5.2)]
     pipeline.generator = MagicMock()
     pipeline.generator.generate.return_value = "The answer is 42."
     return pipeline
@@ -118,6 +120,7 @@ def make_ready_pipeline(doc_store: DocumentStore | None = None) -> MagicMock:
                   start_char=0, end_char=33, metadata={"source": "test.pdf"})
     p.retriever.retrieve.return_value = [(chunk, 0.85)]
     p.hybrid_retriever.retrieve.return_value = [(chunk, 0.85)]
+    p.reranker.rerank.return_value = [(chunk, 5.2)]
     p.generator.generate.return_value = "Python is a language."
     p.generator.generate_with_history.return_value = "Python is a language."
     p.generator.stream.return_value = iter(["Python ", "is a language."])
@@ -332,6 +335,39 @@ class TestQuery:
         app.dependency_overrides[get_pipeline] = lambda: pipeline
         body = client.post("/query", json={"question": "hello"}).json()
         assert body["sources"][0]["source"] == "test.pdf"
+
+    def test_rerank_true_returns_200(self, client):
+        pipeline = make_pipeline_with_store(["AI is transforming the world."])
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        resp = client.post("/query", json={"question": "What is AI?", "rerank": True})
+        assert resp.status_code == 200
+
+    def test_rerank_calls_reranker(self, client):
+        pipeline = make_pipeline_with_store(["Some text about machine learning."])
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        client.post("/query", json={"question": "machine learning", "rerank": True})
+        pipeline.reranker.rerank.assert_called_once()
+
+    def test_rerank_false_does_not_call_reranker(self, client):
+        pipeline = make_pipeline_with_store(["Some text about machine learning."])
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        client.post("/query", json={"question": "machine learning", "rerank": False})
+        pipeline.reranker.rerank.assert_not_called()
+
+    def test_rerank_default_does_not_call_reranker(self, client):
+        pipeline = make_pipeline_with_store(["Some text."])
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        client.post("/query", json={"question": "text"})
+        pipeline.reranker.rerank.assert_not_called()
+
+    def test_rerank_response_has_sources(self, client):
+        pipeline = make_pipeline_with_store(["Neural networks learn from data."])
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        body = client.post(
+            "/query", json={"question": "how do neural networks learn?", "rerank": True}
+        ).json()
+        assert "sources" in body
+        assert len(body["sources"]) > 0
 
 
 # ---------------------------------------------------------------------------

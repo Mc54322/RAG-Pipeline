@@ -18,6 +18,15 @@ class QueryRequest(BaseModel):
         le=1.0,
         description="Minimum score threshold — passages scoring below this are excluded. The API uses hybrid retrieval (RRF fusion), so live scores are small values (~0.005–0.03), not cosine similarities in [0, 1]. Leave at 0.0 unless you understand RRF score ranges.",
     )
+    rerank: bool = Field(
+        default=False,
+        description=(
+            "If true, apply cross-encoder re-ranking after hybrid retrieval. "
+            "Fetches k×3 candidates then re-ranks to the top k. Improves precision "
+            "at the cost of additional inference time. Source scores in the response "
+            "will be raw cross-encoder logits (unbounded) rather than RRF values."
+        ),
+    )
 
 
 class SourceChunk(BaseModel):

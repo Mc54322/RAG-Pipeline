@@ -41,6 +41,7 @@ from src.hybrid_retriever import HybridRetriever
 from src.ingestion import clean_text, load_pdf
 from src.memory import ConversationMemory
 from src.prompt import build_prompt, get_system_prompt
+from src.reranker import Reranker
 from src.retriever import Retriever
 from src.vector_store import VectorStore
 
@@ -73,17 +74,19 @@ class Pipeline:
         self.retriever: Retriever | None = None
         self.bm25_store: BM25Store | None = None
         self.hybrid_retriever: HybridRetriever | None = None
+        self.reranker: Reranker | None = None
         self.generator: Generator | None = None
         self.memory: ConversationMemory = ConversationMemory()
         self.document_store: DocumentStore | None = None
 
     def startup(self) -> None:
         """Load the embedding model and LLM client. Called once at app startup."""
-        logger.info("Loading embedding model...")
+        logger.info("Loading models...")
         self.embedder = Embedder()
+        self.reranker = Reranker()
         self.generator = Generator()
         self.document_store = DocumentStore(self.embedder.dimension)
-        logger.info("Pipeline ready — model: %s", self.embedder.model_name)
+        logger.info("Pipeline ready — embedder: %s", self.embedder.model_name)
 
     def _rebuild_retriever(self) -> None:
         """Rebuild the dense retriever, BM25 index, and hybrid retriever."""
@@ -324,10 +327,14 @@ def query(
             detail="No documents ingested yet. POST a PDF to /ingest first.",
         )
 
-    logger.info("Query: %r (k=%d, min_score=%.2f)", request.question[:80], request.k, request.min_score)
+    fetch_k = request.k * 3 if request.rerank else request.k
+    logger.info(
+        "Query: %r (k=%d, rerank=%s)",
+        request.question[:80], request.k, request.rerank,
+    )
     results = pipeline.hybrid_retriever.retrieve(
         request.question,
-        k=request.k,
+        k=fetch_k,
         min_score=request.min_score,
     )
 
@@ -337,6 +344,10 @@ def query(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No relevant passages found. Try lowering min_score.",
         )
+
+    if request.rerank:
+        results = pipeline.reranker.rerank(request.question, results, top_n=request.k)
+        logger.info("Reranked to %d candidates", len(results))
 
     prompt = build_prompt(request.question, results)
     answer = pipeline.generator.generate(prompt, system=get_system_prompt())

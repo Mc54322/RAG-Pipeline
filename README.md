@@ -21,7 +21,7 @@ Most RAG tutorials hide complexity behind abstractions. This project builds each
 | Vector store | FAISS | Battle-tested, no infra needed |
 | Keyword search | BM25 (`rank-bm25`) | Catches exact terms embeddings miss |
 | Hybrid fusion | Reciprocal Rank Fusion | Scale-free, no hyperparameters to tune — default retrieval path in the API |
-| Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 | Joint query-passage scoring, higher precision — library and benchmarks only, not on live API routes |
+| Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 | Joint query-passage scoring, higher precision — opt-in via `"rerank": true` on `/query` |
 | Evaluation | SQuAD token F1 + exact match | No API key needed, standard QA metrics |
 | Streaming | Anthropic SDK streaming + FastAPI SSE | Incremental token delivery, lower perceived latency |
 | Memory | Fixed-capacity FIFO conversation store | Multi-turn dialogue without blowing context window |
@@ -206,6 +206,19 @@ results = hybrid.retrieve("What causes climate change?", k=5)
 
 Dense retrieval captures semantic similarity; BM25 captures exact keyword matches. RRF fuses the two ranked lists without requiring score normalisation or a tuning parameter.
 
+### Re-ranker (`src/reranker.py`)
+
+An optional third stage, available on `/query` via `"rerank": true`. Fetches `k×3` candidates from the hybrid retriever, then scores each (query, passage) pair jointly using a cross-encoder:
+
+```python
+from src.reranker import Reranker
+
+reranker = Reranker()
+results = reranker.rerank(query, hybrid_results, top_n=5)
+```
+
+The cross-encoder reads the query and passage together in one forward pass, giving a much more accurate relevance judgment than independent embeddings. The trade-off is that inference runs per candidate at query time — use it when precision matters more than latency. Scores are raw logits (unbounded), not RRF values.
+
 ### Prompt Builder (`src/prompt.py`)
 
 Formats retrieved chunks and the user's question into a structured prompt:
@@ -336,7 +349,7 @@ uvicorn api.main:app --reload
 | `GET` | `/documents` | List all ingested documents |
 | `DELETE` | `/documents/{source}` | Remove a document and rebuild the index |
 | `POST` | `/reset` | Clear all documents and reset the pipeline |
-| `POST` | `/query` | Ask a question, get an answer |
+| `POST` | `/query` | Ask a question, get an answer. Pass `"rerank": true` to enable cross-encoder re-ranking |
 | `POST` | `/query/stream` | Ask a question, receive answer as SSE stream |
 | `POST` | `/chat` | Ask a question with conversation memory |
 | `POST` | `/chat/clear` | Clear the conversation history |
@@ -352,6 +365,11 @@ curl -X POST http://localhost:8000/ingest \
 curl -X POST http://localhost:8000/query \
      -H "Content-Type: application/json" \
      -d '{"question": "What is the main argument?", "k": 5}'
+
+# Ask with cross-encoder re-ranking enabled
+curl -X POST http://localhost:8000/query \
+     -H "Content-Type: application/json" \
+     -d '{"question": "What is the main argument?", "k": 5, "rerank": true}'
 ```
 
 Response from `/query`:
@@ -532,7 +550,7 @@ These are deliberate scope decisions, not oversights. Each has a known solution 
 | **Single-user only** | The pipeline is a shared singleton. All users share one conversation memory — there is no session isolation |
 | **In-memory state** | The FAISS index and conversation history are lost on every server restart. `VectorStore.save/load` exists but is not called by the API |
 | **Plain-text PDF only** | Ingestion uses `fitz.page.get_text()`. Scanned PDFs (no text layer), tables, and multi-column layouts are not supported. Scanned or image-only files now return HTTP 422 with a descriptive message |
-| **Reranker is library-only** | `src/reranker.py` (cross-encoder/ms-marco-MiniLM-L-6-v2) is implemented and benchmarked but is not wired into any API route. All live queries use the two-stage hybrid path only |
+| **Reranker is `/query`-only** | Cross-encoder re-ranking is available on `POST /query` via `"rerank": true`. It is not yet wired into `/query/stream` (would negate streaming latency benefits) or `/chat` |
 | **No concurrency guards** | Simultaneous ingest requests can race on `_rebuild_retriever()`. Safe for single-user use; not safe under concurrent load |
 
 ---
