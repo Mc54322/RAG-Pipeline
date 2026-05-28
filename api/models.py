@@ -16,7 +16,7 @@ class QueryRequest(BaseModel):
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="Minimum cosine similarity threshold for retrieved passages.",
+        description="Minimum score threshold — passages scoring below this are excluded. The API uses hybrid retrieval (RRF fusion), so live scores are small values (~0.005–0.03), not cosine similarities in [0, 1]. Leave at 0.0 unless you understand RRF score ranges.",
     )
 
 
@@ -66,7 +66,7 @@ class ChatRequest(BaseModel):
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="Minimum cosine similarity threshold for retrieved passages.",
+        description="Minimum score threshold — passages scoring below this are excluded. The API uses hybrid retrieval (RRF fusion), so live scores are small values (~0.005–0.03), not cosine similarities in [0, 1]. Leave at 0.0 unless you understand RRF score ranges.",
     )
 
 

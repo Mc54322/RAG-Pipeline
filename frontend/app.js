@@ -180,9 +180,9 @@ async function submitQuery() {
 /**
  * Render the answer and source passages into the answer section.
  *
- * Score thresholds are calibrated for all-MiniLM-L6-v2 cosine similarity.
- * Real retrieval scores for this model typically land in 0.2–0.6; a score
- * of 0.5+ indicates a strong match.
+ * NOTE: colour bands (≥0.5 high, ≥0.25 mid, <0.25 low) were calibrated for
+ * cosine similarity scores. The API now returns RRF fusion scores (~0.005–0.03),
+ * so all passages will appear in the low (red) band. Thresholds need updating.
  *
  * @param {{ answer: string, sources: Array<{text: string, score: number, source: string}> }} data
  */

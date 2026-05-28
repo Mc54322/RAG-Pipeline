@@ -21,7 +21,7 @@ Most RAG tutorials hide complexity behind abstractions. This project builds each
 | Vector store | FAISS | Battle-tested, no infra needed |
 | Keyword search | BM25 (`rank-bm25`) | Catches exact terms embeddings miss |
 | Hybrid fusion | Reciprocal Rank Fusion | Scale-free, no hyperparameters to tune — default retrieval path in the API |
-| Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 | Joint query-passage scoring, higher precision |
+| Re-ranker | cross-encoder/ms-marco-MiniLM-L-6-v2 | Joint query-passage scoring, higher precision — library and benchmarks only, not on live API routes |
 | Evaluation | SQuAD token F1 + exact match | No API key needed, standard QA metrics |
 | Streaming | Anthropic SDK streaming + FastAPI SSE | Incremental token delivery, lower perceived latency |
 | Memory | Fixed-capacity FIFO conversation store | Multi-turn dialogue without blowing context window |
@@ -189,7 +189,7 @@ retriever = Retriever(embedder, store)
 results = retriever.retrieve("What causes climate change?", k=5, min_score=0.3)
 ```
 
-`min_score` is a cosine similarity threshold. Setting it to `0.3–0.4` filters out weakly related chunks before they reach the prompt.
+`min_score` is a cosine similarity threshold when calling `Retriever` directly. Setting it to `0.3–0.4` filters out weakly related chunks before they reach the prompt. **The live API uses `HybridRetriever`, which returns RRF fusion scores (~0.005–0.03) — leave `min_score=0.0` when querying the API unless you understand RRF score ranges.**
 
 ### Hybrid Retriever (`src/hybrid_retriever.py`)
 
@@ -359,11 +359,13 @@ Response from `/query`:
 {
   "answer": "The main argument is...",
   "sources": [
-    {"text": "...", "score": 0.8241, "source": "paper.pdf"},
-    {"text": "...", "score": 0.7103, "source": "paper.pdf"}
+    {"text": "...", "score": 0.0328, "source": "paper.pdf"},
+    {"text": "...", "score": 0.0320, "source": "paper.pdf"}
   ]
 }
 ```
+
+Scores are RRF fusion values (typically 0.005–0.03 with two retrievers). They are **not** cosine similarities — do not compare them against a [0, 1] scale.
 
 ---
 
@@ -518,6 +520,20 @@ Token F1 and Exact Match are computed without API calls using the SQuAD evaluati
 **XSS protection on chunk text.** Chunk content comes from user-uploaded PDFs, which can contain arbitrary characters. Before inserting chunk text into `innerHTML`, `escapeHtml()` replaces `&`, `<`, `>`, and `"` with their HTML entities. This prevents a malicious PDF from injecting `<script>` tags into the page.
 
 **HTTP 503 before ingest, not 500.** A 503 (Service Unavailable) clearly communicates "the service is up but not ready" — distinct from a 500 (Internal Server Error) which implies something broke. A client can handle 503 by showing a "please upload a document first" message.
+
+---
+
+## Known Limitations
+
+These are deliberate scope decisions, not oversights. Each has a known solution if the project were extended to production.
+
+| Limitation | Detail |
+|---|---|
+| **Single-user only** | The pipeline is a shared singleton. All users share one conversation memory — there is no session isolation |
+| **In-memory state** | The FAISS index and conversation history are lost on every server restart. `VectorStore.save/load` exists but is not called by the API |
+| **Plain-text PDF only** | Ingestion uses `fitz.page.get_text()`. Scanned PDFs (no text layer), tables, and multi-column layouts are not supported. Scanned or image-only files now return HTTP 422 with a descriptive message |
+| **Reranker is library-only** | `src/reranker.py` (cross-encoder/ms-marco-MiniLM-L-6-v2) is implemented and benchmarked but is not wired into any API route. All live queries use the two-stage hybrid path only |
+| **No concurrency guards** | Simultaneous ingest requests can race on `_rebuild_retriever()`. Safe for single-user use; not safe under concurrent load |
 
 ---
 
